@@ -1,0 +1,280 @@
+// README.md
+// WarCardGame - Unity core scripts (Android, iOS, Windows)
+// This repository contains the core C# scripts to implement the card game described by the user.
+// Targets: Unity 2020.3+ (LTS recommended) — builds for Android, iOS and Windows.
+// How to use:
+// 1. Create a Unity project and import these scripts into an "Scripts" folder.
+// 2. Create prefabs for Card visualizations and UI elements. Attach CardView.cs to the prefab.
+// 3. Create a GameObject "GameManager" and attach GameManager.cs. Hook UIManager reference.
+// 4. Create Players, Decks (ScriptableObjects or created at runtime). Use the provided example factories.
+// 5. Expand card effects by implementing ICardEffect and wiring effects into ScriptableObjects.
+
+// The code below provides a rule-engine skeleton, network-agnostic single-device play (hotseat or AI).
+// The engine intentionally treats cards as data + effect objects and resolves outcomes using context —
+// matching the user's requirement that cards don't have fixed attack/defense values but depend on situation.
+
+
+// ---------- CardBase.cs ----------
+using System;
+using System.Collections.Generic;
+using UnityEngine;
+
+public enum CardType { PlayerAvatar, Terrain, Base, Resource_Money, Resource_Mineral, Resource_Wood, Unit, Spy, Info }
+public enum UnitRange { Melee, Ranged }
+
+[Serializable]
+public class CardData {
+    public string id;
+    public string title;
+    public CardType type;
+    public string description;
+    // Tags and meta for rules
+    public Dictionary<string,string> meta = new Dictionary<string,string>();
+}
+
+public interface ICardEffect {
+    // Apply effect; return textual log
+    string Resolve(CardInstance source, GameContext context);
+}
+
+[Serializable]
+public class CardInstance {
+    public CardData data;
+    public Player owner;
+    public bool faceUp = false; // terrain starts faceDown
+    public bool inPlay = false;
+    public Vector2Int position; // arbitrary battlefield position if needed
+
+    public List<ICardEffect> effects = new List<ICardEffect>();
+
+    public CardInstance(CardData d, Player owner){
+        this.data = d; this.owner = owner; faceUp = (d.type != CardType.Terrain);
+    }
+}
+
+// ---------- ResourceCard.cs ----------
+using UnityEngine;
+
+[CreateAssetMenu(menuName = "WarGame/ResourceCardData")]
+public class ResourceCardData : ScriptableObject {
+    public string id;
+    public string title;
+    public CardType resourceType; // money/mineral/wood
+    [TextArea]
+    public string description;
+}
+
+// ---------- UnitCard.cs ----------
+using UnityEngine;
+
+[CreateAssetMenu(menuName = "WarGame/UnitCardData")]
+public class UnitCardData : ScriptableObject {
+    public string id;
+    public string title;
+    public UnitRange range;
+    [Tooltip("Base cost in resource tokens. Fill meta for complex costs")]
+    public int baseCost = 1; // conceptual, actual purchasing uses Resource system
+    [TextArea]
+    public string description;
+}
+
+// ---------- Player.cs ----------
+using System.Collections.Generic;
+using UnityEngine;
+
+public class Player {
+    public string playerId;
+    public string displayName;
+
+    // zones
+    public List<CardInstance> hand = new List<CardInstance>();
+    public List<CardInstance> battlefield = new List<CardInstance>();
+    public List<CardInstance> baseCards = new List<CardInstance>();
+    public List<CardInstance> terrainCards = new List<CardInstance>();
+    public List<CardInstance> resourcePool = new List<CardInstance>();
+
+    public Player(string id, string name){ playerId = id; displayName = name; }
+
+    public bool HasResources(){
+        return resourcePool.Count > 0;
+    }
+}
+
+// ---------- Deck.cs ----------
+using System.Collections.Generic;
+
+public class Deck {
+    private List<CardData> cards = new List<CardData>();
+    public Deck(List<CardData> initial){ cards = new List<CardData>(initial); }
+    public void Shuffle(){
+        var rng = new System.Random();
+        int n = cards.Count;
+        while(n > 1){
+            n--;
+            int k = rng.Next(n+1);
+            var val = cards[k]; cards[k] = cards[n]; cards[n] = val;
+        }
+    }
+    public CardData Draw(){ if(cards.Count==0) return null; var c = cards[0]; cards.RemoveAt(0); return c; }
+}
+
+// ---------- GameContext.cs ----------
+using System.Collections.Generic;
+
+public class GameContext {
+    public List<Player> players = new List<Player>();
+    public int currentPlayerIndex = 0;
+    public Deck resourceDeckMoney;
+    public Deck resourceDeckMineral;
+    public Deck resourceDeckWood;
+
+    public List<CardInstance> neutralBattlefield = new List<CardInstance>();
+
+    public Player CurrentPlayer => players[currentPlayerIndex];
+    public Player OpponentPlayer => players[(currentPlayerIndex+1)%players.Count];
+
+    // convenience: evaluate whether win conditions are met after each action
+    public string EvaluateWinCondition(){
+        // Evaluate 7 conditions listed by user (in order of check) — minimal implementations.
+        // 1. Destroy avatar
+        foreach(var p in players){
+            bool hasAvatar = false;
+            foreach(var c in p.battlefield){ if(c.data.type==CardType.PlayerAvatar && c.inPlay) hasAvatar = true; }
+            if(!hasAvatar) return (GetOpponent(p).displayName + " wins (avatar destroyed)");
+        }
+        // 2. Destroy all base cards of opponent
+        foreach(var p in players){ if(p.baseCards.Count==0) return (GetOpponent(p).displayName + " wins (bases destroyed)"); }
+        // 3. Capture victory-terrain or all victory terrains — treat as special meta key on terrain cards
+        // check opponent
+        foreach(var p in players){ bool oppHasVictoryTerrain=false; foreach(var t in GetOpponent(p).terrainCards){ if(t.data.meta.ContainsKey("victory")==true) oppHasVictoryTerrain=true; } if(!oppHasVictoryTerrain) return (p.displayName+" wins (captured victory terrain)"); }
+        // 4. Capture capital card (meta key capital=true)
+        foreach(var p in players){ bool oppHasCapital=false; foreach(var t in GetOpponent(p).baseCards){ if(t.data.meta.ContainsKey("capital")) oppHasCapital=true; } if(!oppHasCapital) return (p.displayName+" wins (capital captured)"); }
+        // 5. Destroy economy/resources
+        foreach(var p in players){ if(p.resourcePool.Count==0 && !CanAcquireResource(p)) return (GetOpponent(p).displayName+" wins (economy destroyed)"); }
+        // 6. Destroy political zones — placeholder: if opponent has meta "political_zone" removed
+        // 7. If opponent has no resource cards and cannot get any and is attacked everywhere -> simplified into resource exhaustion above
+        return null; // no winner yet
+    }
+
+    public Player GetOpponent(Player p){ return players.Find(x=>x!=p); }
+
+    private bool CanAcquireResource(Player p){
+        // simplified: if resource decks still have cards
+        if(resourceDeckMoney!=null) return true;
+        return false;
+    }
+}
+
+// ---------- GameManager.cs ----------
+using System.Collections.Generic;
+using UnityEngine;
+
+public class GameManager : MonoBehaviour {
+    public GameContext context = new GameContext();
+    public UIManager ui;
+
+    void Start(){
+        SetupExampleGame();
+        ui.RefreshUI(context);
+    }
+
+    void SetupExampleGame(){
+        // Create players
+        var p1 = new Player("p1","Player 1");
+        var p2 = new Player("p2","Player 2");
+        context.players.Add(p1); context.players.Add(p2);
+
+        // Create simple resource decks (placeholders)
+        context.resourceDeckMoney = new Deck(new List<CardData>());
+
+        // Example: create avatar card for each player
+        var avatarData = new CardData(){ id="avatar", title="Avatar", type=CardType.PlayerAvatar, description="ตัวแทนผู้เล่น" };
+        var c1 = new CardInstance(avatarData,p1); c1.inPlay = true; p1.battlefield.Add(c1);
+        var c2 = new CardInstance(avatarData,p2); c2.inPlay = true; p2.battlefield.Add(c2);
+
+        // Example terrain pre-placed faceDown
+        var plainTerrain = new CardData(){ id="plain", title="ทุ่งราบ", type=CardType.Terrain, description="เพิ่มความเร็วให้หน่วย" };
+        var t1 = new CardInstance(plainTerrain,p1); t1.faceUp = false; p1.terrainCards.Add(t1);
+        var t2 = new CardInstance(plainTerrain,p2); t2.faceUp = false; p2.terrainCards.Add(t2);
+
+        // Example base
+        var baseData = new CardData(){ id="base1", title="ป้อมทัพ", type=CardType.Base, description="ที่วางกองทัพ" };
+        var b1 = new CardInstance(baseData,p1); b1.inPlay = true; p1.baseCards.Add(b1);
+    }
+
+    public void EndTurn(){
+        context.currentPlayerIndex = (context.currentPlayerIndex+1) % context.players.Count;
+        ui.RefreshUI(context);
+        var win = context.EvaluateWinCondition();
+        if(win != null) ui.ShowGameEnd(win);
+    }
+
+    // Example action: reveal terrain by moving into it
+    public string MoveIntoTerrain(CardInstance mover, CardInstance terrain){
+        terrain.faceUp = true;
+        // apply area effects here
+        var log = $"{mover.owner.displayName} moved into {terrain.data.title}";
+        ui.Log(log);
+        return log;
+    }
+}
+
+// ---------- UIManager.cs ----------
+using UnityEngine;
+using UnityEngine.UI;
+
+public class UIManager : MonoBehaviour {
+    public Text logText;
+    public Transform playerPanel;
+
+    public void RefreshUI(GameContext ctx){
+        if(logText!=null) logText.text = $"Current: {ctx.CurrentPlayer.displayName} | Opponent: {ctx.OpponentPlayer.displayName}";
+        // Expand with bindings to show hands, battlefield, resource counts etc.
+    }
+
+    public void Log(string message){
+        if(logText!=null) logText.text += "\n"+message;
+    }
+
+    public void ShowGameEnd(string message){
+        Log("Game end: "+message);
+        // Show modal, disable input
+    }
+}
+
+// ---------- CardView.cs (attach to card prefab) ----------
+using UnityEngine;
+using UnityEngine.UI;
+
+public class CardView : MonoBehaviour {
+    public CardInstance instance;
+    public Text titleText;
+    public Text descText;
+    public Image artImage;
+
+    public void Bind(CardInstance inst){
+        instance = inst;
+        if(titleText!=null) titleText.text = inst.data.title;
+        if(descText!=null) descText.text = inst.data.description;
+        // faceUp state controls visibility
+        gameObject.SetActive(true);
+    }
+}
+
+// ---------- Notes for extension ----------
+/*
+- Effects system: Implement ICardEffect classes (e.g., DestroyBaseEffect, CaptureTerrainEffect, RevealTerrainEffect) and attach them to CardData via ScriptableObjects or JSON.
+- Rule engine should compute combat results using battlefield context: adjacency, terrain modifiers, presence of bases, resource availability. Because cards have no fixed ATK/DEF, create evaluators that calculate "effective power" from:
+    * unit type + range
+    * terrain modifiers (when terrain is faceUp and applicable)
+    * support from adjacent units/bases
+    * special spy/info cards that modify fog of war or trigger events
+- Resource acquisition: design resource-gathering actions that move Resource CardInstances from shared resource decks into a player's resourcePool. Money can be converted from mined resources per rules.
+- Purchasing: when player attempts to deploy a card, validate resourcePool and consume appropriate Resource CardInstances.
+- Victory checks: The GameContext.EvaluateWinCondition contains a minimal mapping of the user's 7 conditions; refine using flags/meta on cards for capital/victory terrains/political zones.
+- Multiplayer: use Unity Netcode for GameObjects or a turn-based server. For cross-platform, Unity's transport works on Android/iOS/Windows. Alternatively implement hotseat or AI locally first.
+- UI: Build drag & drop for cards, context menus for actions (move, attack, capture, buy/convert resources).
+- Persistence: save decks/collections using ScriptableObjects or JSON files.
+*/
+
+// End of code bundle
