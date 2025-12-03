@@ -1,0 +1,231 @@
+// pubspec.yaml (ส่วนสำคัญ)
+name: war_card_game
+description: เกมการ์ดสงครามยุคใหม่ – รองรับ Android, iOS, Windows
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: '>=3.3.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  riverpod: ^2.5.1
+  flutter_riverpod: ^2.5.1
+  firebase_core: ^3.4.0
+  cloud_firestore: ^5.4.3
+  uuid: ^4.5.0
+  freezed_annotation: ^2.4.4
+  json_annotation: ^4.9.0
+
+dev_dependencies:
+  build_runner: ^2.4.12
+  freezed: ^2.5.7
+  json_serializable: ^6.8.0
+// lib/models/card_models.dart
+import 'package:freezed_annotation/freezed_annotation.dart';
+
+part 'card_models.freezed.dart';
+part 'card_models.g.dart';
+
+enum CardType {
+  leader,           // ตัวแทนคนเล่น
+  terrain,          // ภูมิประเทศ (คว่ำหน้า)
+  base,             // ฐานทัพ
+  unit,             // กองทัพ
+  resource,         // ทรัพยากร (เงิน, แร่, ไม้)
+  spy,              // จารชน/สายลับ
+  intel,            // การ์ดข้อมูล
+}
+
+enum ResourceType { gold, ore, wood }
+
+@freezed
+class GameCard with _$GameCard {
+  const factory GameCard({
+    required String id,
+    required String name,
+    required CardType type,
+    required String ownerId,        // ผู้เล่นที่ครอบครองจริง
+    String? displayedOwnerId,      // สำหรับฝ่ายตรงข้ามเห็น (อาจเป็น fake ถ้าเป็นสายลับ)
+    @Default(false) bool isFaceUp,  // คว่ำหน้าหรือไม่ (terrain, spy บางใบ)
+    @Default(false) bool isTapped,
+    ResourceType? resourceType,
+    Map<String, dynamic>? effects,  // เก็บเอฟเฟกต์ต่าง ๆ
+    String? terrainEffect,          // เช่น "ป้องกัน +2 ให้ทหารราบ"
+  }) = _GameCard;
+
+  factory GameCard.fromJson(Map<String, dynamic> json) =>
+      _$GameCardFromJson(json);
+}
+// lib/models/game_state.dart
+@freezed
+class GameState with _$GameState {
+  const factory GameState({
+    required String gameId,
+    required String currentTurnPlayerId,
+    required List<GameCard> battlefield,   // ทุกการ์ดที่อยู่บนสนาม
+    required Map<String, List<GameCard>> playerHands,     // มือผู้เล่น (ซ่อนจากอีกฝ่าย)
+    required Map<String, List<GameCard>> playerResources, // ทรัพยากรที่ครอบครอง
+    required Map<String, bool> playerReady, // พร้อมเริ่มหรือยัง
+    String? winnerId,
+    @Default(GamePhase.setup) GamePhase phase,
+  }) = _GameState;
+
+  factory GameState.fromJson(Map<String, dynamic> json) =>
+      _$GameStateFromJson(json);
+}
+
+enum GamePhase { setup, planning, battle, end }
+// lib/screens/battlefield_screen.dart
+import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../providers/game_provider.dart';
+
+class BattlefieldScreen extends ConsumerWidget {
+  final String gameId;
+  final String playerId;
+
+  const BattlefieldScreen({required this.gameId, required this.playerId});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final gameState = ref.watch(gameProvider(gameId));
+
+    return Scaffold(
+      appBar: AppBar(title: Text("สงครามการ์ด – รหัสห้อง: $gameId")),
+      body: gameState.when(
+        loading: () => Center(child: CircularProgressIndicator()),
+        error: (e, _) => Center(child: Text("Error: $e")),
+        data: (state) {
+          final myField = state.battlefield
+              .where((card) => card.ownerId == playerId)
+              .toList();
+          final opponentField = state.battlefield
+              .where((card) => card.ownerId != playerId)
+              .toList();
+
+          return Column(
+            children: [
+              // === เขตฝ่ายตรงข้าม ===
+              Expanded(
+                child: BattlefieldZone(
+                  cards: opponentField,
+                  isMine: false,
+                  playerId: playerId,
+                  gameId: gameId,
+                ),
+              ),
+              Divider(height: 4, thickness: 4),
+              // === เขตของเรา ===
+              Expanded(
+                child: BattlefieldZone(
+                  cards: myField,
+                  isMine: true,
+                  playerId: playerId,
+                  gameId: gameId,
+                ),
+              ),
+              // ปุ่มจบเทิร์น
+              if (state.currentTurnPlayerId == playerId)
+                ElevatedButton(
+                  onPressed: () => ref.read(gameProvider(gameId).notifier).endTurn(),
+                  child: Text("จบเทิร์น"),
+                ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+}
+// lib/widgets/card_widget.dart
+class CardWidget extends ConsumerWidget {
+  final GameCard card;
+  final bool isMine;
+  final String currentPlayerId;
+
+  const CardWidget({
+    required this.card,
+    required this.isMine,
+    required this.currentPlayerId,
+  });
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final bool canSeeFace = isMine ||
+        card.isFaceUp ||
+        card.type == CardType.resource; // ทรัพยากรเห็นหน้าเสมอ
+
+    return GestureDetector(
+      onTap: () {
+        // คลิกเลือกการ์ดเพื่อโจมตี / ใช้ความสามารถ
+        ref.read(selectedCardProvider.notifier).state = card;
+      },
+      child: Container(
+        width: 90,
+        height: 130,
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(
+            color: card.ownerId == currentPlayerId ? Colors.blue : Colors.red,
+            width: 3,
+          ),
+        ),
+        child: canSeeFace
+            ? _buildFace(card)
+            : _buildBack(), // คว่ำหน้า
+      ),
+    );
+  }
+
+  Widget _buildFace(GameCard card) {
+    Color bgColor = switch (card.type) {
+      CardType.leader => Colors.purple,
+      CardType.terrain => Colors.brown,
+      CardType.base => Colors.grey[800]!,
+      CardType.unit => Colors.green,
+      CardType.spy => Colors.black,
+      CardType.intel => Colors.orange,
+      CardType.resource => Colors.amber,
+    };
+
+    return Stack(
+      children: [
+        Container(color: bgColor.withOpacity(0.9)),
+        Center(
+          child: Text(
+            card.name,
+            style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+            textAlign: TextAlign.center,
+          ),
+        ),
+        if (card.isTapped)
+          Transform.rotate(
+            angle: 1.57, // 90 องศา
+            child: Container(color: Colors.black.withOpacity(0.5)),
+          ),
+      ],
+    );
+  }
+
+  Widget _buildBack() {
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.grey[900],
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Center(
+        child: Icon(Icons.help_outline, size: 50, color: Colors.white),
+      ),
+    );
+  }
+}
+// lib/providers/game_provider.dart
+final gameProvider = StreamProvider.family<GameState, String>((ref, gameId) {
+  return FirebaseFirestore.instance
+      .collection('games')
+      .doc(gameId)
+      .snapshots()
+      .map((snap) => GameState.fromJson(snap.data()!));
+});
