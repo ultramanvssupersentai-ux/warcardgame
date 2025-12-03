@@ -1,0 +1,102 @@
+// CardData.cs (A ScriptableObject to store card definitions)
+using UnityEngine;
+
+public enum CardType { PlayerAvatar, Terrain, Base, Resource, Army, Spy, Info }
+public enum ResourceType { Money, Mineral, Wood }
+
+[CreateAssetMenu(fileName = "NewCard", menuName = "Card Game/Card Data")]
+public class CardData : ScriptableObject
+{
+    public string cardName;
+    public CardType type;
+    [TextArea] public string description;
+    
+    // สำหรับการ์ดที่ต้องใช้ทรัพยากรในการสร้าง
+    public int moneyCost;
+    public int mineralCost;
+    public int woodCost;
+
+    // สำหรับการ์ด Army
+    public bool isMelee; // สำหรับทหารราบ
+    public bool isRanged; // สำหรับพลยิงระยะไกล
+
+    // สำหรับการ์ด Resource
+    public ResourceType resourceType;
+}
+// Card.cs (Attached to a GameObject representing the card on the field)
+using UnityEngine;
+
+public class Card : MonoBehaviour
+{
+    public CardData data; // ลิงก์ไปยังข้อมูล CardData
+    public Player owner; // ผู้เล่นที่เป็นเจ้าของการ์ด
+    public bool isFlipped; // สำหรับการ์ดภูมิประเทศ
+
+    // สำหรับการ์ด Spy/Agent:
+    public bool isBoughtOver; // ถูกซื้อตัวโดยฝ่ายตรงข้ามหรือไม่
+
+    // เมธอดสำหรับแสดงเอฟเฟกต์ของภูมิประเทศเมื่อถูกหงาย
+    public void RevealTerrainEffect()
+    {
+        if (data.type == CardType.Terrain && !isFlipped)
+        {
+            isFlipped = true;
+            // เรียก Game Manager เพื่ออัปเดตเอฟเฟกต์ต่อกองทัพทั้งหมดในพื้นที่นี้
+            Debug.Log($"Terrain {data.cardName} Revealed! Applying Effect.");
+            // ... Logic เพื่อเรียกใช้ Terrain Effect ...
+        }
+    }
+}
+// Player.cs
+using UnityEngine;
+using System.Collections.Generic;
+
+public class Player : MonoBehaviour
+{
+    public int playerID;
+    
+    // ทรัพยากรที่ครอบครอง: ใช้ Dictionary เพื่อเก็บยอดรวม
+    public Dictionary<ResourceType, int> ownedResources = new Dictionary<ResourceType, int>()
+    {
+        { ResourceType.Money, 0 },
+        { ResourceType.Mineral, 0 },
+        { ResourceType.Wood, 0 }
+    };
+
+    // เงื่อนไขการสร้าง: ใช้ทรัพยากร
+    public bool CanAfford(CardData cardToBuild)
+    {
+        return ownedResources[ResourceType.Money] >= cardToBuild.moneyCost &&
+               ownedResources[ResourceType.Mineral] >= cardToBuild.mineralCost &&
+               ownedResources[ResourceType.Wood] >= cardToBuild.woodCost;
+    }
+
+    // การใช้ทรัพยากร
+    public void SpendResources(CardData cardToBuild)
+    {
+        ownedResources[ResourceType.Money] -= cardToBuild.moneyCost;
+        ownedResources[ResourceType.Mineral] -= cardToBuild.mineralCost;
+        ownedResources[ResourceType.Wood] -= cardToBuild.woodCost;
+    }
+
+    // การได้มาซึ่งทรัพยากร (เช่น จากการยึด หรือการค้าขาย)
+    public void GainResource(ResourceType type, int amount)
+    {
+        ownedResources[type] += amount;
+        Debug.Log($"Player {playerID} gained {amount} {type}. New total: {ownedResources[type]}");
+    }
+
+    // ฟังก์ชันตรวจสอบเงื่อนไขการแพ้ (ตามเงื่อนไขข้อ 7)
+    public bool CheckDefeatCondition7()
+    {
+        // 1. ตรวจสอบว่าไม่เหลือการ์ดทรัพยากร
+        bool hasResources = ownedResources[ResourceType.Money] > 0 || 
+                            ownedResources[ResourceType.Mineral] > 0 || 
+                            ownedResources[ResourceType.Wood] > 0;
+        
+        // 2. ตรวจสอบว่าสามารถหาได้ทันหรือไม่ (อันนี้ซับซ้อน อาจต้องใช้ระบบ "การจั่ว" หรือ "การผลิต" ต่อเทิร์น)
+        // **สำหรับตอนนี้ ให้สมมติว่าถ้าไม่มีทรัพยากรเลย ก็ไม่สามารถโต้กลับได้**
+        
+        return !hasResources; // แพ้ถ้าไม่มีทรัพยากรเลย
+    }
+}
