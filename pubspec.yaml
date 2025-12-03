@@ -1,0 +1,30 @@
+name: war_card_game
+description: เกมการ์ดสงคราม – เล่นได้จริง 100%
+version: 1.0.0+1
+
+environment:
+  sdk: '>=3.3.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  flutter_riverpod: ^2.5.1
+  firebase_core: ^3.4.0
+  cloud_firestore: ^5.4.3
+  uuid: ^4.5.0
+  freezed_annotation: ^2.4.4
+  json_annotation: ^4.9.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  build_runner: ^2.4.12
+  freezed: ^2.5.7
+  json_serializable: ^6.8.0
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/data/cards.json
+    - assets/images/card_back.png
+    - assets/images/
