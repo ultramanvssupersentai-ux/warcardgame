@@ -1,0 +1,494 @@
+// GameManager.cs
+using UnityEngine;
+using System.Collections.Generic;
+using System.Linq;
+
+public enum GameMode {
+    SinglePlayer,
+    Multiplayer,
+    HotSeat
+}
+
+public enum WinCondition {
+    KillPlayerCard,
+    DestroyBase,
+    CaptureTerritories,
+    CaptureCapital,
+    DestroyEconomy,
+    DestroyPoliticalZone,
+    ResourceExhaustion
+}
+
+public class GameManager : MonoBehaviour {
+    public static GameManager Instance;
+    
+    public GameMode currentGameMode;
+    public List<WinCondition> activeWinConditions;
+    public List<Player> players;
+    public int currentPlayerIndex;
+    
+    // Battlefield zones
+    public Dictionary<Player, List<Card>> playerFields;
+    public Dictionary<Player, List<Card>> resourceZones;
+    public Dictionary<Player, List<Card>> spyZones;
+    
+    // Game state
+    public bool isGameActive;
+    public Phase currentPhase;
+    
+    void Awake() {
+        if (Instance == null) Instance = this;
+        else Destroy(gameObject);
+        
+        DontDestroyOnLoad(gameObject);
+    }
+    
+    public void InitializeGame(List<WinCondition> selectedConditions) {
+        activeWinConditions = selectedConditions;
+        playerFields = new Dictionary<Player, List<Card>>();
+        resourceZones = new Dictionary<Player, List<Card>>();
+        spyZones = new Dictionary<Player, List<Card>>();
+        
+        SetupPlayers();
+        StartGame();
+    }
+    
+    void SetupPlayers() {
+        // 2-4 players based on game mode
+        players = new List<Player>();
+        for (int i = 0; i < 2; i++) {
+            players.Add(new Player($"Player {i+1}", i));
+        }
+    }
+    
+    void StartGame() {
+        isGameActive = true;
+        currentPlayerIndex = 0;
+        StartTurn(players[0]);
+    }
+}
+// BaseCard.cs
+using UnityEngine;
+using System.Collections.Generic;
+
+public abstract class BaseCard : MonoBehaviour {
+    public string cardId;
+    public string cardName;
+    public CardType cardType;
+    public Player owner;
+    public Sprite cardFront;
+    public Sprite cardBack;
+    public bool isFaceUp = true;
+    
+    public enum CardType {
+        Player,
+        Terrain,
+        Base,
+        Resource,
+        Army,
+        Spy,
+        Info
+    }
+    
+    public abstract void OnPlay();
+    public abstract void OnDestroy();
+    public virtual void FlipCard() {
+        isFaceUp = !isFaceUp;
+        // Update visual
+    }
+    
+    public virtual bool CanBeAttacked() {
+        return true;
+    }
+}
+
+// PlayerCard.cs
+public class PlayerCard : BaseCard {
+    public override void OnPlay() {
+        // Player card is always on field
+        Debug.Log($"Player card {cardName} deployed");
+    }
+    
+    public override void OnDestroy() {
+        // Check win condition
+        WinConditionManager.Instance.CheckWinCondition(WinCondition.KillPlayerCard, owner);
+    }
+    
+    public override bool CanBeAttacked() {
+        return true; // Player card can always be attacked
+    }
+}
+
+// TerrainCard.cs
+public class TerrainCard : BaseCard {
+    public Dictionary<ArmyType, TerrainEffect> terrainEffects;
+    public bool isRevealed = false;
+    
+    void Start() {
+        cardType = CardType.Terrain;
+        isFaceUp = false; // Start face down
+    }
+    
+    public void RevealTerrain() {
+        isFaceUp = true;
+        isRevealed = true;
+        ApplyTerrainEffects();
+    }
+    
+    void ApplyTerrainEffects() {
+        // Apply effects to army cards in this zone
+    }
+}
+
+// ArmyCard.cs
+public class ArmyCard : BaseCard {
+    public ArmyType armyType;
+    public int movementRange = 1;
+    public bool canAttack = true;
+    public bool isProtectedByBase = false;
+    
+    public enum ArmyType {
+        Infantry,
+        Ranged,
+        Cavalry,
+        Artillery
+    }
+    
+    public override void OnPlay() {
+        // Check if behind base card
+        CheckBaseProtection();
+    }
+    
+    void CheckBaseProtection() {
+        // Logic to determine if behind a base card
+    }
+    
+    public bool CanAttackTarget(BaseCard target) {
+        if (!canAttack) return false;
+        
+        // Check range based on army type
+        if (armyType == ArmyType.Infantry) {
+            return CanAttackMelee(target);
+        }
+        
+        return true;
+    }
+    
+    bool CanAttackMelee(BaseCard target) {
+        // Check if target is adjacent
+        return true;
+    }
+}
+// ResourceManager.cs
+using System.Collections.Generic;
+using UnityEngine;
+
+public class ResourceManager : MonoBehaviour {
+    public static ResourceManager Instance;
+    
+    public Deck resourceDeck;
+    public Dictionary<Player, List<ResourceCard>> playerResources;
+    public Dictionary<Player, int> playerGold;
+    
+    public enum ResourceType {
+        Gold,
+        Mineral,
+        Wood
+    }
+    
+    void Awake() {
+        if (Instance == null) Instance = this;
+    }
+    
+    public void AcquireResource(Player player, ResourceType type, int amount) {
+        // Player acquires resource through various means
+        switch(type) {
+            case ResourceType.Gold:
+                playerGold[player] += amount;
+                break;
+            case ResourceType.Mineral:
+            case ResourceType.Wood:
+                AddResourceCard(player, type, amount);
+                break;
+        }
+    }
+    
+    void AddResourceCard(Player player, ResourceType type, int amount) {
+        // Add physical resource cards to player's zone
+        for (int i = 0; i < amount; i++) {
+            var card = CreateResourceCard(type);
+            playerResources[player].Add(card);
+        }
+    }
+    
+    public bool CanAfford(Player player, Dictionary<ResourceType, int> cost) {
+        foreach (var resource in cost) {
+            if (!HasEnoughResource(player, resource.Key, resource.Value)) {
+                return false;
+            }
+        }
+        return true;
+    }
+    
+    bool HasEnoughResource(Player player, ResourceType type, int amount) {
+        // Check if player has enough resources
+        return true;
+    }
+}
+
+// ResourceCard.cs
+public class ResourceCard : BaseCard {
+    public ResourceManager.ResourceType resourceType;
+    public int value;
+    
+    public override void OnPlay() {
+        // Resource cards are typically not "played" but acquired
+    }
+}
+// TurnManager.cs
+using System.Collections.Generic;
+
+public class TurnManager : MonoBehaviour {
+    public Phase currentPhase;
+    public Player currentPlayer;
+    public int turnCount = 1;
+    
+    public enum Phase {
+        DrawPhase,
+        ResourcePhase,
+        MainPhase,
+        CombatPhase,
+        EndPhase
+    }
+    
+    public void StartTurn(Player player) {
+        currentPlayer = player;
+        currentPhase = Phase.DrawPhase;
+        
+        ExecuteDrawPhase();
+    }
+    
+    void ExecuteDrawPhase() {
+        // Player draws cards
+        currentPhase = Phase.ResourcePhase;
+    }
+    
+    void ExecuteResourcePhase() {
+        // Player collects resources
+        currentPhase = Phase.MainPhase;
+        // Enable player actions
+    }
+    
+    public void EndTurn() {
+        // Clean up and switch to next player
+        int nextIndex = (GameManager.Instance.currentPlayerIndex + 1) % GameManager.Instance.players.Count;
+        GameManager.Instance.currentPlayerIndex = nextIndex;
+        
+        StartTurn(GameManager.Instance.players[nextIndex]);
+    }
+}
+// WinConditionManager.cs
+using System.Collections.Generic;
+using UnityEngine;
+
+public class WinConditionManager : MonoBehaviour {
+    public static WinConditionManager Instance;
+    
+    void Awake() {
+        if (Instance == null) Instance = this;
+    }
+    
+    public void CheckWinCondition(WinCondition condition, Player triggerPlayer = null) {
+        bool conditionMet = false;
+        Player winner = null;
+        
+        switch(condition) {
+            case WinCondition.KillPlayerCard:
+                conditionMet = CheckPlayerCardDeath(triggerPlayer);
+                winner = GetOpponent(triggerPlayer);
+                break;
+            case WinCondition.ResourceExhaustion:
+                conditionMet = CheckResourceExhaustion();
+                winner = GetPlayerWithResources();
+                break;
+            // Add other conditions
+        }
+        
+        if (conditionMet && winner != null) {
+            EndGame(winner, condition);
+        }
+    }
+    
+    bool CheckPlayerCardDeath(Player player) {
+        // Check if player's player card is destroyed
+        return !player.HasPlayerCard();
+    }
+    
+    bool CheckResourceExhaustion() {
+        foreach (var player in GameManager.Instance.players) {
+            if (player.resources.Count == 0 && player.IsUnderAttack()) {
+                return true;
+            }
+        }
+        return false;
+    }
+    
+    void EndGame(Player winner, WinCondition condition) {
+        Debug.Log($"Game Over! {winner.playerName} wins by {condition}");
+        // Show victory screen
+    }
+}
+// CardUI.cs
+using UnityEngine;
+using UnityEngine.UI;
+using UnityEngine.EventSystems;
+
+public class CardUI : MonoBehaviour, IDragHandler, IBeginDragHandler, IEndDragHandler {
+    public BaseCard cardData;
+    public Image cardImage;
+    public Text cardNameText;
+    
+    private RectTransform rectTransform;
+    private CanvasGroup canvasGroup;
+    private Vector2 originalPosition;
+    
+    void Start() {
+        rectTransform = GetComponent<RectTransform>();
+        canvasGroup = GetComponent<CanvasGroup>();
+        
+        UpdateCardUI();
+    }
+    
+    void UpdateCardUI() {
+        if (cardData != null) {
+            cardNameText.text = cardData.cardName;
+            cardImage.sprite = cardData.isFaceUp ? cardData.cardFront : cardData.cardBack;
+        }
+    }
+    
+    public void OnBeginDrag(PointerEventData eventData) {
+        originalPosition = rectTransform.anchoredPosition;
+        canvasGroup.alpha = 0.6f;
+        canvasGroup.blocksRaycasts = false;
+    }
+    
+    public void OnDrag(PointerEventData eventData) {
+        rectTransform.anchoredPosition += eventData.delta / GetComponentInParent<Canvas>().scaleFactor;
+    }
+    
+    public void OnEndDrag(PointerEventData eventData) {
+        canvasGroup.alpha = 1f;
+        canvasGroup.blocksRaycasts = true;
+        
+        // Check if dropped on valid zone
+        RaycastResult result = eventData.pointerCurrentRaycast;
+        if (result.gameObject != null) {
+            DropZone dropZone = result.gameObject.GetComponent<DropZone>();
+            if (dropZone != null && dropZone.CanAcceptCard(cardData)) {
+                dropZone.AcceptCard(this);
+                return;
+            }
+        }
+        
+        // Return to original position if invalid drop
+        rectTransform.anchoredPosition = originalPosition;
+    }
+}
+
+// BattlefieldUI.cs
+public class BattlefieldUI : MonoBehaviour {
+    public GridLayoutGroup battlefieldGrid;
+    public List<DropZone> dropZones;
+    
+    public void SetupBattlefield(int rows, int columns) {
+        // Create grid for cards
+        battlefieldGrid.constraintCount = columns;
+        
+        // Initialize drop zones for each grid cell
+        InitializeDropZones(rows * columns);
+    }
+    
+    void InitializeDropZones(int count) {
+        dropZones = new List<DropZone>();
+        for (int i = 0; i < count; i++) {
+            GameObject zoneObj = new GameObject($"DropZone_{i}");
+            zoneObj.transform.SetParent(battlefieldGrid.transform);
+            DropZone zone = zoneObj.AddComponent<DropZone>();
+            zone.zoneType = DropZone.ZoneType.Battlefield;
+            dropZones.Add(zone);
+        }
+    }
+}
+// SaveSystem.cs
+using System.IO;
+using System.Runtime.Serialization.Formatters.Binary;
+using UnityEngine;
+
+public static class SaveSystem {
+    public static void SaveGame(GameData data) {
+        BinaryFormatter formatter = new BinaryFormatter();
+        string path = Application.persistentDataPath + "/save.wcg";
+        FileStream stream = new FileStream(path, FileMode.Create);
+        
+        formatter.Serialize(stream, data);
+        stream.Close();
+    }
+    
+    public static GameData LoadGame() {
+        string path = Application.persistentDataPath + "/save.wcg";
+        if (File.Exists(path)) {
+            BinaryFormatter formatter = new BinaryFormatter();
+            FileStream stream = new FileStream(path, FileMode.Open);
+            
+            GameData data = formatter.Deserialize(stream) as GameData;
+            stream.Close();
+            
+            return data;
+        } else {
+            Debug.LogError("Save file not found");
+            return null;
+        }
+    }
+}
+
+[System.Serializable]
+public class GameData {
+    public List<PlayerData> players;
+    public List<CardData> battlefield;
+    public int currentTurn;
+    public List<WinCondition> activeConditions;
+    // ... other game state data
+}
+// MainMenuController.cs
+using UnityEngine;
+using UnityEngine.UI;
+using UnityEngine.SceneManagement;
+
+public class MainMenuController : MonoBehaviour {
+    public GameObject winConditionPanel;
+    public Toggle[] winConditionToggles;
+    
+    public void StartGame() {
+        List<WinCondition> selectedConditions = new List<WinCondition>();
+        
+        for (int i = 0; i < winConditionToggles.Length; i++) {
+            if (winConditionToggles[i].isOn) {
+                selectedConditions.Add((WinCondition)i);
+            }
+        }
+        
+        // Pass to game scene
+        PlayerPrefs.SetString("WinConditions", 
+            string.Join(",", selectedConditions));
+        SceneManager.LoadScene("GameScene");
+    }
+    
+    public void LoadGame() {
+        SceneManager.LoadScene("GameScene");
+        // Load saved data
+    }
+    
+    public void QuitGame() {
+        Application.Quit();
+    }
+}
